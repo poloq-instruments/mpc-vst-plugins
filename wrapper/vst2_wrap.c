@@ -22,6 +22,10 @@
 #ifndef HAS_LFO_BPM
 #define HAS_LFO_BPM 0 /* 1: pass the host tempo to the DSP as "lfo_bpm" */
 #endif
+#ifndef HAS_TRANSPORT
+#define HAS_TRANSPORT 0 /* 1: tell the DSP when the host transport plays/stops as "transport" = "1"/"0"; a jump back
+                          * in song position while playing (a loop, a locate) is sent as "1" again */
+#endif
 #ifndef MODULE_DIR
 #define MODULE_DIR NULL /* set via vst.json "defines" for a DSP that reads its own files
                           * (ROMs, etc.) from "<module_dir>/..." (see jv880's create_instance) */
@@ -74,6 +78,7 @@ enum {
     effGetVendorVersion = 49, effCanDo = 51, effGetVstVersion = 58,
 };
 enum { audioMasterAutomate = 0, audioMasterGetTime = 7, audioMasterUpdateDisplay = 42, kVstTempoValid = 1 << 10 };
+enum { kVstTransportPlaying = 1 << 1, kVstPpqPosValid = 1 << 9 };
 enum { effFlagsCanReplacing = 1 << 4, effFlagsProgramChunks = 1 << 5, effFlagsIsSynth = 1 << 8 };
 
 /* ---- per-instance state ------------------------------------------------- */
@@ -87,10 +92,13 @@ typedef struct {
     int inpos;
     double bpm;
     volatile int holdFrames[NPARAMS];  /* momentary params: frames left before reporting back to 0 (hold_ms) */
-    float shadow[NPARAMS];   /* unrounded position last set on an integer param; <0 = none */
     signed char last_on[NPARAMS];  /* last "<key>_on" value told to the host, +1 (0 = unknown) */
+    int playing;             /* HAS_TRANSPORT: last transport state sent */
+    double ppq;              /* HAS_TRANSPORT: song position at the last block, to spot a jump back */
     volatile char need_update_display;  /* deferred audioMasterUpdateDisplay -- see setParameter() */
+    volatile char changed[NPARAMS];  /* params the plugin changed itself (step_of on an option), to report */
     float open[NPARAMS];     /* popup "open" flags (popup.h): kept here, never sent to the DSP or saved */
+    float last_pos[NPARAMS]; /* stepped params: the last position the host asked for, in steps (-1 = none yet) */
     char chunk[8192];
 } wrap_t;
 
@@ -130,16 +138,20 @@ static float get_norm(wrap_t *w, int i) {
         if (g_api->get_param(w->dsp, k2, buf, sizeof buf) > 0) return atoi(buf) ? 1.0f : 0.0f;
     }
     if (g_api->get_param(w->dsp, PARAMS[i].key, buf, sizeof buf) <= 0) return PARAMS[i].def;
-    float v = str_to_norm(&PARAMS[i], buf);
-    /* An integer param is rounded on its way to the DSP, so a Q-Link nudge under one step would read back
-     * as the old value and never accumulate. Hand the host its unrounded position while the DSP still
-     * holds the value that position rounds to; if something else changed it, drop the shadow. */
-    if (PARAMS[i].int_display && !PARAMS[i].nopts && PARAMS[i].max > PARAMS[i].min && w->shadow[i] >= 0) {
-        float half = 0.5f / (PARAMS[i].max - PARAMS[i].min) + 1e-4f;
-        if (fabsf(v - w->shadow[i]) <= half) return w->shadow[i];
-        w->shadow[i] = -1;
-    }
-    return v;
+    return str_to_norm(&PARAMS[i], buf);
+}
+
+/* Where a param that moves in whole steps (an option list, a whole-number value) lands, in steps from its minimum.
+ * The host nudges it two ways: the data wheel sends the current value plus a fraction of a step, while a drag or a
+ * Q-Link sweep keeps sending positions from where it started, which just after a step still round back to the old
+ * value (the knob then flickers between two values). So round toward the way it's moving: from the host's last
+ * position while it moves continuously, else from the current value. A turn smaller than one step still moves one
+ * step, and a sweep moves steadily. */
+static float settle(float pos, float cur, float last) {
+    if (fabsf(pos - roundf(pos)) <= 0.001f) return roundf(pos);   /* on a step: a click, a preset, automation */
+    float dir = (last >= 0 && fabsf(pos - last) < 0.5f) ? pos - last : pos - cur;
+    if (dir == 0) return roundf(cur);
+    return dir > 0 ? ceilf(pos - 0.001f) : floorf(pos + 0.001f);
 }
 
 static void setParameter(AEffect *e, int32_t i, float n) {
@@ -156,7 +168,15 @@ static void setParameter(AEffect *e, int32_t i, float n) {
          * This trigger's own key is never sent to the DSP at all. */
         if (n > 0.5f) {
             const param_t *tp = &PARAMS[p->step_target];
-            if (g_api->get_param(w->dsp, tp->key, buf, sizeof buf) > 0) {
+            if (tp->nopts > 1 && g_api->get_param(w->dsp, tp->key, buf, sizeof buf) > 0) {
+                /* An option target (e.g. a synth model picked with two buttons): step by index, wrapping like
+                 * a hardware selector button, and report the new value so the host redraws what shows it. */
+                int idx = (int)lroundf(str_to_norm(tp, buf) * (tp->nopts - 1)) + (int)lroundf(p->step_delta);
+                idx = ((idx % tp->nopts) + tp->nopts) % tp->nopts;
+                norm_to_str(tp, (float)idx / (tp->nopts - 1), buf, sizeof buf);
+                g_api->set_param(w->dsp, tp->key, buf);
+                w->changed[p->step_target] = 1;
+            } else if (g_api->get_param(w->dsp, tp->key, buf, sizeof buf) > 0) {
                 float cur = (float)atof(buf) + p->step_delta;
                 if (cur < tp->min) cur = tp->min;
                 if (cur > tp->max) cur = tp->max;
@@ -177,22 +197,22 @@ static void setParameter(AEffect *e, int32_t i, float n) {
         return;
     }
     if (p->nopts > 1) {
-        /* A value on an option (button press, preset, automation) selects it. A value
-         * between options is a Q-Link/encoder nudge from the current one: step one
-         * option that way, else small nudges round back and never change state. */
+        /* A value on an option (button press, preset, automation) selects it; one between options is a
+         * Q-Link / encoder / drag move, settled as above. */
         float pos = clamp01(n) * (p->nopts - 1);
-        if (fabsf(pos - roundf(pos)) > 0.001f) {
-            nudge = 1;
-            float cur = get_norm(w, i) * (p->nopts - 1);
-            int idx = (int)lroundf(cur) + (pos > cur ? 1 : -1);
-            if (idx < 0) idx = 0;
-            if (idx > p->nopts - 1) idx = p->nopts - 1;
-            n = (float)idx / (p->nopts - 1);
-        }
+        nudge = fabsf(pos - roundf(pos)) > 0.001f;
+        float idx = settle(pos, get_norm(w, i) * (p->nopts - 1), w->last_pos[i]);
+        w->last_pos[i] = pos;
+        n = clamp01(idx / (p->nopts - 1));
+    }
+    else if (p->int_display && p->max > p->min) {
+        float span = p->max - p->min, pos = clamp01(n) * span;
+        float steps = settle(pos, get_norm(w, i) * span, w->last_pos[i]);
+        w->last_pos[i] = pos;
+        n = clamp01(steps / span);
     }
     norm_to_str(p, n, buf, sizeof buf);
     g_api->set_param(w->dsp, PARAMS[i].key, buf);
-    w->shadow[i] = (p->int_display && !p->nopts) ? clamp01(n) : -1;
     if (PARAMS[i].momentary && n > 0.5f) w->holdFrames[i] = PARAMS[i].hold_ms > 0 ? (int)(PARAMS[i].hold_ms * 44.1f) : 1;
     if (!nudge) popup_picked(w->open, w->holdFrames, i);   /* a list pick closes it; a Q-Link nudge doesn't */
     w->need_update_display = 1;   /* deferred to processReplacing(), see the step_target branch above */
@@ -200,9 +220,20 @@ static void setParameter(AEffect *e, int32_t i, float n) {
 
 static float getParameter(AEffect *e, int32_t i) { return get_norm(e->object, i); }
 
+static void update_transport(wrap_t *w, const VstTimeInfo *ti) {
+    int playing = (ti->flags & kVstTransportPlaying) != 0, ppq_ok = (ti->flags & kVstPpqPosValid) != 0;
+    int restart = playing && w->playing && ppq_ok && ti->ppqPos < w->ppq - 0.01;
+    if (playing != w->playing || restart) g_api->set_param(w->dsp, "transport", playing ? "1" : "0");
+    w->playing = playing;
+    if (ppq_ok) w->ppq = ti->ppqPos;
+}
+
 static void update_tempo(wrap_t *w) {
-    VstTimeInfo *ti = (VstTimeInfo *)w->master(&w->fx, audioMasterGetTime, 0, kVstTempoValid, 0, 0);
-    if (!ti || !(ti->flags & kVstTempoValid) || ti->tempo <= 0) return;
+    VstTimeInfo *ti = (VstTimeInfo *)w->master(&w->fx, audioMasterGetTime, 0,
+                                              kVstTempoValid | (HAS_TRANSPORT ? kVstPpqPosValid : 0), 0, 0);
+    if (!ti) return;
+    if (HAS_TRANSPORT) update_transport(w, ti);
+    if (!HAS_LFO_BPM || !(ti->flags & kVstTempoValid) || ti->tempo <= 0) return;
     if (fabs(ti->tempo - w->bpm) > 0.01) {
         char buf[32];
         w->bpm = ti->tempo;
@@ -228,12 +259,14 @@ static void render_frames(wrap_t *w, float **out, int32_t n, int accumulate) {
 
 static void housekeeping(AEffect *e, int32_t n) {
     wrap_t *w = e->object;
-    if (HAS_LFO_BPM) update_tempo(w);
+    if (HAS_LFO_BPM || HAS_TRANSPORT) update_tempo(w);
     /* A trigger param (e.g. Generate) fired: tell the host it is back to 0 so
      * buttons bound to it drop their highlight. Done here, not inside
      * setParameter, so the host is not re-entered from its own call. */
     for (int i = 0; i < NPARAMS; i++)
         if (w->holdFrames[i] > 0 && (w->holdFrames[i] -= n) <= 0) { w->holdFrames[i] = 0; w->master(&w->fx, audioMasterAutomate, i, 0, 0, 0.0f); }
+    for (int i = 0; i < NPARAMS; i++)
+        if (w->changed[i]) { w->changed[i] = 0; w->master(&w->fx, audioMasterAutomate, i, 0, 0, get_norm(w, i)); }
     if (w->need_update_display) {
         w->need_update_display = 0;
         w->master(&w->fx, audioMasterUpdateDisplay, 0, 0, 0, 0.0f);
@@ -387,7 +420,6 @@ __attribute__((visibility("default"))) AEffect *VSTPluginMain(audioMasterCallbac
 #endif
     wrap_t *w = calloc(1, sizeof *w);
     if (!w) return NULL;
-    for (int i = 0; i < NPARAMS; i++) w->shadow[i] = -1;
 #ifdef MODULE_SUBDIR
     char data_dir[600], here[512];
     const char *module_dir = MODULE_DIR;   /* an absolute MODULE_DIR is still the fallback */
@@ -400,6 +432,7 @@ __attribute__((visibility("default"))) AEffect *VSTPluginMain(audioMasterCallbac
     if (!w->dsp) { free(w); return NULL; }
     w->master = master;
     w->pos = DSP_BLOCK;
+    for (int i = 0; i < NPARAMS; i++) w->last_pos[i] = -1;
     AEffect *e = &w->fx;
     e->magic = 0x56737450; /* 'VstP' */
     e->dispatcher = dispatcher;

@@ -639,6 +639,9 @@ nudge is lost. Fix: `norm_to_str` rounds params flagged `"display": "int"`, and 
 unrounded position last set, and returns that from `getParameter` while the DSP still holds the value it rounds to
 (dropped if anything else changes the param). Applies to every port with `display: int` params (jv880, dx7).
 Float params (maze) are parsed with `atof` and never had this.
+**Superseded (2026-09-30):** `shadow[]` is gone; `settle()` (see "Whole-number params stuck under the data wheel" and
+"That nudge made sweeps flicker") covers integer and option params alike, and on an MPC One also the data wheel, where
+sub-step accumulation needed many clicks per step. Re-check a slow Q-Link turn on jv880's 0..127 params.
 
 **Native labels ignore `label=`.** A control's name text is the assigned parameter's own name (see "Control names"
 above), so the same key placed twice shows the same name twice. A `REVERB` knob in an OUTPUT frame and the
@@ -757,3 +760,41 @@ whose file is missing at startup is dropped from the saved list.
 
 ### 2026-09-30: installer tests under BusyBox
 `INSTALLER_TEST_PATH` with BusyBox 1.38 (static musl build, applets symlinked, python3 added): `tools.test_catalog.InstallerTest`, 11 tests OK, including the MODES restore. The Force has BusyBox 1.36.1, so this is close to, not identical to, the device userland.
+
+## Knob filmstrips over 16384 px drift as they turn (MPC One, 2026-09-27, MPC Plaits)
+A knob with r=80 (170 px frames x 128 = 21760 px strip) visibly moved up and down on the screen while its value
+changed; r=58 knobs (126 px frames, 16128 px) on the same page were fine. Most likely MPC's image/texture limit of
+16384 px, beyond which the strip is resampled and the frame offsets no longer line up. Keep `2r+10 <= 128`, i.e.
+r <= 58 (the largest seen working; r=59 lands exactly on 16384 and is untested). `shadow_skin.py` now warns.
+
+## Whole-number params stuck under the data wheel (MPC One, 2026-09-27, MPC Plaits)
+An int-range param (polyphony 1..8, `"display": "int"`) only trembled under the data wheel: each tick sends the
+current value plus a fraction of a step, the DSP rounds it back, MPC snaps the knob back. `vst2_wrap.c` now treats
+a change that rounds back to the current value as a one-step nudge for `int_display` params (as it already did
+for options), and sends such params to the DSP as integers. Big moves (a fast Q-Link turn) behave as before.
+
+**That nudge made sweeps flicker (MPC One, 2026-09-29, MPC Plaits v1.1).** A drag or Q-Link sweep keeps sending
+positions from where it started, not from the value the plugin settled on, so right after a one-step nudge the
+next position rounds back to the old value, gets nudged again, and so on: NOTES / UNISON (1..8) visibly flickered.
+Offline, a slow sweep over a 1..8 param flipped 246 times. `vst2_wrap.c` `settle()` now rounds toward the way the
+knob moves (from the host's previous position while it sweeps, else from the current value), for option lists and
+`int_display` params alike: a data-wheel tick still moves one step, a sweep moves steadily. Test:
+`mpc-vst-plaits/tests/controls.c`. Not yet re-checked on the device.
+
+## step_of on an option param (2026-09-27, MPC Plaits)
+`step_of`/`step_delta` now also works when the target is an option list: it steps by index, wrapping like a hardware
+selector button, and reports the new value with `audioMasterAutomate` from `processReplacing` so the host redraws
+anything bound to it (the value text, `IndexedEnabling` pictures). Used for Plaits' two model buttons (a `stepper`
+with `prev=`/`next=`). Verified offline; not yet on a device.
+
+## Eurorack/firmware DSP assumes zeroed RAM; a plugin's heap isn't (MPC One, 2026-09-27, MPC Plaits)
+Plaits' FM 2-Op engine and most engines after it played silence inside MPC but fine in every offline test (x86,
+32-bit ARM under QEMU, and `tools/bench.sh` on the device itself). A device log showed healthy raw engine output
+and LPG gain, yet the voice output stayed at Plaits' silence value. Cause: several engines' `Init()` never set
+some state (e.g. `FMEngine`'s downsampler taps). On the module that RAM is `.bss`, zeroed at boot; MPC's
+long-running process hands the plugin reused heap, so the state could start as NaN, which then stuck in the
+voice's LPG filter (a NaN reaches ARM's float->int conversion as 0, i.e. silence) and silenced every LPG engine
+on that voice. Fresh test processes get zeroed pages, which is why nothing offline ever failed. Reproduced
+offline by overriding `operator new` to fill allocations with 0xFF (`mpc-vst-plaits/tests/dirty_heap.cc`); fixed
+by allocating the engine state with `calloc` + placement new. For any port of firmware code: allocate its state
+zeroed, and run the host tests with a dirty heap.
