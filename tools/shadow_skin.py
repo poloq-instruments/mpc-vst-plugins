@@ -917,7 +917,7 @@ def build(layout_path, params, skin_dir, art_bin, png_from_ppm):
                 ql["Q-Link %d" % qlink_for_slot(s)] = index[k]
             comp = "%s|%s" % (tab["name"], title)
             pages.append({"version": 3, "tabName": title, "fnKeyIndex": t, "fnKeySubIndex": sp,
-                          "qlinkBoundsData": qlink_column_bounds(tab, keys), "componentName": comp,
+                          "qlinkBoundsData": qlink_column_bounds(tab, keys, base_dir), "componentName": comp,
                           "initialSize": "0 0 %d %d" % (W, H), "scale": 1.0})
             qmap.append({"Tab": t + 1, "SubTab": sp + 1, "Bank Direction": "Column", "Q-Links": ql})
             defs[comp] = {"key": comp, "value": {
@@ -996,18 +996,18 @@ def square_strip(path, w, h):
     out.save(path)
 
 
-def qlink_column_bounds(tab, keys):
+def qlink_column_bounds(tab, keys, base_dir="."):
     """One rectangle per Q-Link column, as stock skins do (e.g. AIR OPx-4): with "Bank Direction": "Column", slots
     1-4 are column 1, 5-8 column 2, ... (qlink_for_slot), and MPC outlines the column the Q-Links currently drive --
     on an MPC One each press of the Q-Link button moves to the next one. A single rectangle around all 16 left MPC
     outlining the wrong area. An empty column in the middle gets an empty rectangle; trailing ones are left out."""
-    rects = [qlink_bounds(tab, [k for k in keys[c * 4:c * 4 + 4] if k != "-"]) for c in range(4)]
+    rects = [qlink_bounds(tab, [k for k in keys[c * 4:c * 4 + 4] if k != "-"], base_dir) for c in range(4)]
     while rects and rects[-1] is None:
         rects.pop()
     return [r or "0 0 0 0" for r in rects]
 
 
-def qlink_bounds(tab, keys):
+def qlink_bounds(tab, keys, base_dir="."):
     """Rectangle around the controls in keys (plugin coords), or None if none of them is on the page."""
     xs, ys = [], []
     for w in tab["widgets"]:
@@ -1031,8 +1031,12 @@ def qlink_bounds(tab, keys):
             r = w["r"]
             xs += [w["cx"] - r - 10, w["cx"] + r + 10]
             ys += [w["cy"] - r - 8, w["cy"] + r + 40]
-        elif w["kind"] in ("button", "meter"):
-            continue   # a shared trigger (e.g. GENERATE) would stretch the box across frames; meters take no Q-Link
+        elif w["kind"] == "button":   # boxes are per Q-Link column, so a trigger only stretches its own column's box
+            x, y, bw, bh = button_rect(w, base_dir)
+            xs += [x, x + bw]
+            ys += [y, y + bh]
+        elif w["kind"] == "meter":
+            continue   # meters take no Q-Link
         elif w["kind"] == "toggle":
             xs += [w["cx"] - 60, w["cx"] + 60]
             ys += [w["cy"] - 18, w["cy"] + 38]
