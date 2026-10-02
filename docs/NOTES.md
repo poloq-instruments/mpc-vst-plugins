@@ -4,6 +4,9 @@ Origin: mpc-forums thread "Proof of Concept: Custom Standalone Plugins"
 (viewtopic.php?f=48&t=220981, Sep 2026). Verified on a Force (MPC OS, with MockbaMod) 2026-09-23; paths below are
 from the Force and may differ on MPC Live/One/X/Key (e.g. `Force Documents` vs `MPC Documents`).
 
+How MPC OS itself is put together (processes, thread priorities, ALSA audio/MIDI routing, panel MCU,
+web server/test-app loader): see [MPC_INTERNALS.md](MPC_INTERNALS.md).
+
 ## Facts (verified)
 
 - `/usr/bin/MPC` contains `"pluginList"` + `"-arm"`, `KNOWNPLUGINS`, `VSTPluginMain`.
