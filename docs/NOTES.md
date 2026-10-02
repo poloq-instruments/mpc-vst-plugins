@@ -4,9 +4,6 @@ Origin: mpc-forums thread "Proof of Concept: Custom Standalone Plugins"
 (viewtopic.php?f=48&t=220981, Sep 2026). Verified on a Force (MPC OS, with MockbaMod) 2026-09-23; paths below are
 from the Force and may differ on MPC Live/One/X/Key (e.g. `Force Documents` vs `MPC Documents`).
 
-How MPC OS itself is put together (processes, thread priorities, ALSA audio/MIDI routing, panel MCU,
-web server/test-app loader): see [MPC_INTERNALS.md](MPC_INTERNALS.md).
-
 ## Facts (verified)
 
 - `/usr/bin/MPC` contains `"pluginList"` + `"-arm"`, `KNOWNPLUGINS`, `VSTPluginMain`.
@@ -913,3 +910,20 @@ Size per load is frames × frame area × 4: filmstrip frames are square (`square
 (the display; `card1` is the GPU and refuses KMS ioctls) has one active CRTC with an 800x1280 XRGB8888 buffer, linear
 (modifier 0), so GETFB2 + PRIME export + mmap gives the exact screen. The panel is portrait: rotate 270 degrees. The plugin
 area is 1280x628 at y=110 of the upright image. `tools/screenshot.sh` does all of it.
+
+## Where a plugin runs: threads, cores, memory (MPC One, 3.9.1, 2026-10-01)
+Observed read-only (`/proc/<pid>/task/*`, sysfs).
+- `process()` runs on one of `AudioWorker0..3` (SCHED_FIFO 20, one per core, RT kernel); `Audio Processing` (FIFO 20)
+  drives ALSA. A blocking call there stalls the whole block. MPC keeps a track on one worker (Plaits stayed on
+  AudioWorker1 across runs). Plugins are in-process: a crash kills MPC (systemd restarts it; the project is lost).
+- CPU: 4x Cortex-A17 at a fixed 1.608 GHz (NEON, VFPv4, hardware divide), `isolcpus=2-3`, every MPC thread pinned:
+  core 0 = UI, timers, browser, AudioWorker0 and most IRQs; core 1 = AudioWorker1, FileIO; core 2 = AudioWorker2, MIDI;
+  core 3 = Audio Processing, AudioWorker3, audio DMA IRQ. IRQ threads (FIFO 50) preempt the workers, mostly on core 0.
+  Idle load: core 2 ~1%, the others 7-9%, so core 2 is the best home for a plugin's own background thread. A thread
+  inherits its creator's affinity and policy (from the editor thread it lands on busy core 0): set affinity explicitly.
+- Memory: MPC is `mlockall`ed (~650 MB locked), so plugin allocations are locked and faulted in up front: allocate in
+  open/resume, never in `process()`. MPC itself defers `free()` to a `Malloc Free` thread; do the same. ~1.2 GB free.
+- Build flags leave NEON unused: plain `-O2` on the armv7 toolchain means VFPv3-D16 scalar code (the deployed `plaits.so`
+  reports `Tag_FP_arch: VFPv3-D16`). Candidate (not benchmarked): `-mcpu=cortex-a17 -mfpu=neon-vfpv4 -O3`; GCC only
+  vectorises float maths onto ARMv7 NEON with `-funsafe-math-optimizations`, since NEON flushes denormals.
+- Denormals: scalar VFP honours them (FPSCR.FZ=0); whether MPC sets FZ on its audio threads is unverified.
