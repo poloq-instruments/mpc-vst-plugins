@@ -798,3 +798,55 @@ on that voice. Fresh test processes get zeroed pages, which is why nothing offli
 offline by overriding `operator new` to fill allocations with 0xFF (`mpc-vst-plaits/tests/dirty_heap.cc`); fixed
 by allocating the engine state with `calloc` + placement new. For any port of firmware code: allocate its state
 zeroed, and run the host tests with a dirty heap.
+
+## Restarting MPC from inside a plugin via `systemd-run` (MPC One, 2026-10-01)
+For a plugin that must restart MPC (e.g. to register a new `pluginList-arm` entry), the restart script must not be a plain
+child: `acvs.service` has `KillMode=control-group`, so `systemctl stop acvs` kills everything spawned from MPC.
+`systemd-run --unit=<name> --collect /bin/sh <script>` starts a transient service in its own cgroup instead. Verified:
+launched from a shell placed in `/system.slice/acvs.service` with `LD_PRELOAD=/usr/lib/libforce_cursor.so` set (as a
+plugin child would be), `systemd-run` returned 0; the script ran in `/system.slice/<name>.service` with `LD_PRELOAD`
+unset (systemd builds the unit's environment, nothing is inherited from MPC), stopped `acvs` (rc 0, inactive),
+survived the stop, started it again (new MPC pid, active ~8 s later). The device also has `unzip`, `sha256sum`, `wget`
+(BusyBox 1.36.1), `libarchive.so.13`, `libz.so.1`. On this unit `/sdcard` is an empty dir on the nearly full root fs
+(~17 MB free); plugins live in `/media/az01-internal/Synths`.
+
+## Plugin Manager POC: install from the MPC screen (MPC One, 2026-10-01)
+`mpc-vst-manager` (separate folder) lists `catalog.json` on the plugin's screen, queues installs/removals and applies them:
+the plugin downloads each zip with the system libcurl (`dlopen("libcurl.so.4")`, CA bundle `/etc/ssl/certs/ca-certificates.crt`),
+checks the catalog sha256 with `sha256sum`, unpacks with `unzip` (children spawned with a clean environment), writes `apply.sh`
+and starts it with `systemd-run`, which stops MPC, runs the package's own `install.sh -y [-n] -t /media/az01-internal/Synths`
+and starts MPC. Verified end to end with MPC Plaits 1.0.0: one plugin-list entry, settings backup made, MPC back up.
+Lessons: GitHub release downloads from the device can stall for tens of seconds (a 30 s low-speed abort failed at 4.5/7 MB),
+so resume with `CURLOPT_RESUME_FROM_LARGE` and retry; and text a worker thread changes is never redrawn unless the plugin
+sends `audioMasterUpdateDisplay`: `HAS_DISPLAY_REV` in the wrapper polls the engine's `display_rev` every ~100 ms for that.
+
+## Engine-driven skins: long text, when= panels and meters switch without a tap (MPC One, 2026-10-01, poc/uiprobe)
+`poc/uiprobe` (62 params, 152 IndexedEnabling parts, `HAS_DISPLAY_REV` + `PARAM_TEXT_MAX 128`), nothing touched:
+- **Value text up to 80+ characters shows in full** on a wide readout. The 23-character limit was only the wrapper's own
+  copy (`copy_str(…, 24)`); `PARAM_TEXT_MAX` raises it per port.
+- **when= panels follow values the engine changes by itself** (a 4-state phase every 2 s, three rows with a 6-way
+  button state and two badges, 40 three-way values every 0.5 s), once the wrapper reports them with
+  `audioMasterAutomate` (it does now under `HAS_DISPLAY_REV`, for every non-text, non-trigger param whose value moved).
+- **`meter` redraws live** from an engine-driven value (a 2 s sawtooth), pauses and resumes with it.
+- **A dense page stays responsive**: the 40-value tab cycling every 0.5 s, with pads, scrolling and tab switches normal.
+So a skin can be a real app screen: status lines, state-dependent buttons/badges/banners and progress bars, all driven
+from a worker thread.
+
+## MPC's filmstrip cache fills internal storage over a session (MPC One, 2026-10-01)
+Every time a plugin screen loads, MPC decodes its filmstrip images (knobs, sliders, `meter`s: `Knob` components with
+`knobType: FilmStrip`) into `/var/tmp/filmstrips/temp_<hex>.img`, raw RGBA, and never deletes them while running. `/var` is
+an overlay whose upper dir is on the internal data partition (`/data/system/var/overlay`, the same 2.7 GB partition as
+`/media/az01-internal`), so the cache eats the space plugins and settings live on. All files dated from the last boot,
+so a reboot seems to clear it (not confirmed); MPC restarts (`acvs`) don't. A test session with many plugin reloads
+and restarts reached 729 files / 2.2 GB and filled the partition (copies failed with "No space left on device").
+The files are not held open between loads, so `rm -f /var/tmp/filmstrips/temp_*.img` frees the space safely
+(delete through `/var`, never the overlay's upper dir).
+Size per load is frames × frame area × 4: filmstrip frames are square (`square_strip`), so a wide thin bar as a
+`meter` is very expensive (a 360×4 bar became 128 frames of 360×360 = 66 MB per load). For bars use `picture`
+(one image per step, mode images, no filmstrip), as the Plugin Manager does.
+
+## Device screenshots (MPC One, 2026-10-01)
+`/dev/fb0` exists but stays black: MPC draws through DRM/KMS. The scanout buffer is readable instead: `/dev/dri/card0`
+(the display; `card1` is the GPU and refuses KMS ioctls) has one active CRTC with an 800x1280 XRGB8888 buffer, linear
+(modifier 0), so GETFB2 + PRIME export + mmap gives the exact screen. The panel is portrait: rotate 270 degrees. The plugin
+area is 1280x628 at y=110 of the upright image. `tools/screenshot.sh` does all of it.
