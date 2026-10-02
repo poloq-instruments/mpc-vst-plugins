@@ -31,15 +31,27 @@ Building on parameter-driven visibility (`IndexedEnabling`, NOTES "Conditional v
       the repo shows a port that needs no adapter.
 
 ## Community catalog
-- [ ] **Online plugin catalog** (Phase 1 in progress) (registry + auto-discovered releases + static site + optional device installer).
-      Design and phased roadmap: `docs/CATALOG.md`. Starts with Phase 0 decisions, then a release manifest in
-      `tools/release.py`.
+The catalog, its site and the installer app are live (see Done). Still open, in `docs/CATALOG.md`:
+- [ ] **Failure handling:** a bad new version is excluded and the previous good one kept; open an issue on the plugin's repo.
+- [ ] **A port template repo** (`vst.json`, `build.sh`, release workflow, `tested.json` stub, README) so a new plugin is
+      catalog-ready from its first commit.
+- [ ] **Update notices honour `param_compat`** (a major bump warns that saved projects will change).
+- [ ] **Announce to the community** and collect what people ask for before building more.
 
 ## Verification
 - [ ] **Stock, unmodded MPC and other models:** the ALSA MIDI-out port (`poc/midiport.c`) without MockbaMod,
       and `tools/probe_device.sh` after firmware updates. Needs the hardware.
 
 ## Done
+- [x] Community catalog and installer (2026-10-02): https://sd88me.github.io/mpc-vst-plugins/ lists the community's plugins
+      (registry in `catalog/plugins/`, releases read from GitHub nightly, every zip checked, per-version "Tested on", all-time
+      downloads, Atom feed), with guides and a one-line shell install (`mpc-store.sh`). The MPC plugin installer app
+      (Windows, Mac, Linux; `tools/desktop`, v0.3.1) installs, removes and prunes over SSH with one MPC restart. Plugins
+      from several authors are listed, and build-yourself ports (Monomodule, Machinemodule) for engines that need your own
+      firmware. Phases 0 to 4 of `docs/CATALOG.md` are done apart from the items above.
+- [x] Loads on MPC OS 2.x (2026-10-02): the shared tools and the ports build against glibc 2.31 (`arm32v7/gcc:11-bullseye`; the
+      build-yourself ports use a `debian:bullseye` cross image), and the catalog rejects anything above 2.32. The installers
+      use `acvs`, or `inmusic-mpc` where there is no `acvs`. NOTES 2026-10-01 has the report that led to this.
 - [x] Control looks and images, offline (2026-09-25): built-in looks (knobs moog/chicken/metal/cap, slider fader,
       toggles led/switch), turning knob images with a still base, filmstrip import (knobs, sliders, meters), slider
       thumb/track, on/off images for toggles, buttons and segments, frame and popup panel pictures, bitmap and

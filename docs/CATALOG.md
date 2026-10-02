@@ -69,7 +69,7 @@ Versioned schema (`"schema": 1`) so the site and installers can evolve without b
 
 ### Validation (CI, per new version)
 Zip layout matches the spec; manifest matches the registry (`id`, `uid`, repo); `.so` is ARM ELF with
-GLIBC <= 2.36; `install.sh`/`uninstall.sh`/`plugin_list.awk` are identical to this repo's canonical copies (or a
+GLIBC <= 2.32; `install.sh`/`uninstall.sh`/`plugin_list.awk` are identical to this repo's canonical copies (or a
 diff is flagged for manual review); checksums match; `uid` and `file=` name don't collide with any other catalog
 entry; license file present. This reuses code already in `tools/release.py`.
 
@@ -112,20 +112,20 @@ here first and move to its own repo (recommended, for community ownership) once 
 - [ ] Ask early adopters which plugins exist today and which already publish GitHub releases.
 
 ### Phase 1: Make every release self-describing
-- [x] Portable paths (2026-09-29, host-tested; **not yet run on a device**): `wrapper/plugin_dir.h` (`dladdr()` on the plugin's own symbol, `/proc/self/maps` fallback) so
+- [x] Portable paths (2026-09-29; device-tested on a Force, `docs/PORTABLE_TEST.md`): `wrapper/plugin_dir.h` (since 2026-10-01 `/proc/self/maps` only: `dladdr()` binds to GLIBC_2.34, which MPC OS 2.x cannot load) so
       engines locate presets/assets next to the `.so` wherever it was loaded from (`/sdcard`, `/media/*/Synths`, ...).
       `install.sh`/`uninstall.sh`/`gen_vst.py` take the target dir from a variable or detect it. Reconcile with
       Locrian's `plugin-meta` export (need to see the file).
 - [x] Spec: `docs/CATALOG_SPEC.md` (registry entry, manifest, catalog.json, channels), schema 1 (2026-09-29). JSON Schema files still to do.
 - [x] `tools/release.py` emits `mpc-plugin.json` (`--id/--repo/--license/--requires`); checksums include it (2026-09-29).
 - [x] `tools/catalog_check.py <zip>` and `tools/test_catalog.py` (2026-09-29).
-- [x] `vst-release.yml` runs the validator; new inputs `plugin_id`, `license`, `requires` (2026-09-29, workflow not yet run in CI).
+- [x] `vst-release.yml` runs the validator; new inputs `plugin_id`, `license`, `requires` (2026-09-29; runs in CI on every port release).
 - [ ] Port template repo (`vst.json`, `build.sh`, release workflow, `tested.json` stub, README) so a new plugin is
       catalog-ready from its first commit. Document in `PORTING.md`.
-- [ ] Back-fill: publish catalog-conformant releases for the existing ports (Maze, JV-880, Acid, Euclidier, ...). 2026-09-29: Crate Digger 1.1.1 and JV-880 1.0.1 built and validated as **drafts** (pass `catalog_check --catalog`); publish after a device smoke test. The rest are still to do.
+- [x] Back-fill (2026-10-02): the existing ports have catalog-conformant releases (portable layout, glibc 2.31): Acid 1.0.3, Crate Digger 1.1.5, Dexed (DX7) 1.0.4, JV-880 1.0.5, Maze Voice 1.0.1, Maze Sequencer 1.0.1 (its 1.0.0 is kept as a pre-release, MPC OS 3.x only), each device-tested on a Force before publishing. Euclidier is parked (0.5.0 spawns the MockbaMod add-on binary) and not listed.
 
 ### Phase 2: The catalog builder
-- [x] (2026-09-29, tested with a fake GitHub source; not yet run against real releases) `tools/catalog_build.py`: read `plugins/*.json`, list GitHub releases (API, token via Actions), download
+- [x] (2026-09-29; runs against real releases, checked 2026-10-02) `tools/catalog_build.py`: read `plugins/*.json`, list GitHub releases (API, token via Actions), download
       matching assets, validate, write `catalog.json` + `catalog.schema.json`. Idempotent and cached by asset id.
 - [ ] Failure handling: bad version excluded, previous good version kept, issue opened on the plugin repo.
 - [x] (`.github/workflows/catalog.yml`, builds and uploads an artifact; Pages deploy comes with Phase 3) Workflow: nightly cron + `repository_dispatch`/`workflow_dispatch`; an optional one-line "ping" step ports
@@ -135,19 +135,18 @@ here first and move to its own repo (recommended, for community ownership) once 
 - [x] `catalog/yanked.json` mechanism for pulling a bad release without touching the author's repo.
 
 ### Phase 3: The website
-- [x] `tools/catalog_site.py` generates the site from `catalog.json`; `catalog.yml` deploys with Pages on main (2026-09-29; checked in headless Chromium with sample data, the Pages deploy has not run: needs Settings > Pages > Source: GitHub Actions).
+- [x] `tools/catalog_site.py` generates the site from `catalog.json`; `catalog.yml` deploys with Pages on main (2026-09-29; checked in headless Chromium; Pages deploy live at https://sd88me.github.io/mpc-vst-plugins/).
 - [x] List with search, filters (kind, style, developer, license, beta) and sorting (updated, downloads, name, developer, kind), state kept in the URL hash; plugin page with history, install steps, checksum, source link.
 - [x] Guide pages Install, Build, Workflow and Add yours (2026-09-29): Markdown in `catalog/pages/*.md`, rendered by `tools/catalog_site.py`
       with a shared menu; checked in headless Chromium at desktop and phone width.
-- [x] (2026-09-29, unit-tested; not yet run against real repos) Atom feed `feed.xml`; "Tested on" from optional `tested.json` in the plugin repo; contributor docs in `catalog/README.md`.
+- [x] (2026-09-29; live, `feed.xml` and `catalog.tsv` both served, checked 2026-10-02) Atom feed `feed.xml`; "Tested on" from optional `tested.json` in the plugin repo; contributor docs in `catalog/README.md`.
 - [ ] Announce to the community; collect what people actually ask for before building Phase 4.
 
 ### Distribution: build-yourself (2026-09-29)
 - [x] Registry `distribution`, `requires_user_files`, `build`, `components`; tag-based versions; guardrails; site card;
       tests (`BuildYourselfTest`); entries for `monomodule` and `machinedrum-module`. Unit-tested with a fake GitHub only.
-- [ ] First real run against the two repos: Monomodule's `v0.9.0` tag predates `release/release.sh`, so it needs a new tag
-      (e.g. `v0.9.1`) to be listed; Machinedrum's `v0.1.0` tag is on a side branch, not `main`. Add `tested.json` to both repos.
-- [ ] Installer/updater (Phase 4) must skip `build-yourself` entries: nothing to download or install.
+- [x] First real run (2026-10-02): the catalog lists Monomodule (0.10.2 and earlier tags) and Machinemodule (0.3.6 and earlier) from their `vX.Y.Z` tags on `main`, with "Tested on" from each repo's `tested.json`. A new version appears after pushing a tag on `main` that contains the build script and the next catalog build.
+- [x] Installer/updater (Phase 4) skip `build-yourself` entries: nothing to download or install (they are not in `catalog.tsv`; the desktop app takes their built zips by drop).
 
 ### Layout migration: one self-contained folder per plugin (started 2026-09-29)
 Locrian's installer uses a drop-in folder in `Synths` (`docs/CATALOG_SPEC.md`, "Portable layout"). Goal: make it our only layout.
@@ -161,20 +160,30 @@ Locrian's installer uses a drop-in folder in `Synths` (`docs/CATALOG_SPEC.md`, "
       `layout: "portable"`; `catalog_check.py` still accepts old-layout zips so earlier releases stay listed.
 - [x] Monomodule (2026-09-30): `release/package.sh` builds two `release.py` packages (One and FX; both carry the user's OS file, One's
       `monomodule/dumps` is user data) plus a top-level installer that runs both. 0.9.2 verified on a Force (sound, presets); tag v0.9.2.
-- [ ] Re-release the current plugins in the new layout and test on a device. Done and verified on a Force (2026-09-30): Dexed 1.0.1,
-      JV-880 1.0.2 (old-layout ROMs moved), Acid 1.0.1, Crate Digger 1.1.3 (engine binaries), Monomodule 0.9.2. Open: Maze Voice (skin
-      being reworked; a 1.0.1 draft exists), Euclidier (parked, 0.5.0, spawns the MockbaMod add-on binary), Machinedrum (build-yourself:
-      `release/build_release.sh` already goes through `release.py`, so the next per-user build is portable; nothing to publish).
-- [x] Guides (Install, Build, Workflow, Setup) checked against the new layout (2026-09-30): Install's manual steps use `plugin-meta.xml`,
+- [x] Re-release the current plugins in the new layout and test on a device (done 2026-10-02, verified on a Force): Dexed 1.0.4, JV-880 1.0.5, Acid 1.0.3, Crate Digger 1.1.5, Maze Voice 1.0.1, Maze Sequencer 1.0.1; Monomodule 0.10.2 and Machinemodule 0.3.6 are build-yourself (per-user builds go through `release.py`, so they are portable). Euclidier stays parked.
+- [x] Guides (Install, Build, Workflow; Setup was merged into Build on 2026-10-01) checked against the new layout (2026-09-30): Install's manual steps use `plugin-meta.xml`,
       and it has "If a plugin disappears after a restart". Site cards carry no layout-specific text (`index.template.html`).
-- [ ] Published releases still in the old layout stay listed and drop off a list-rebuilding scanner (NOTES 2026-09-30); re-release
-      them (item above). Acid 1.0.1 (portable) predates the `MODES` installer, so its `install.sh` differs from the template.
+- [x] Published releases still in the old layout dropped off a list-rebuilding scanner (NOTES 2026-09-30); all current plugins were re-released above, so the scanner and the catalog agree.
 
 ### Phase 4: Install and update from the device or desktop
-- [ ] Hardware check: does the device have `wget`/`curl` with modern TLS, DNS, and room to stage a zip? Record in NOTES.md.
-- [ ] `mpc-store.sh` (BusyBox `sh`): `list`, `install`, `update`, `remove`, `--check`; verifies sha256; keeps an
-      installed-versions file; uses each zip's own `install.sh`. Never restarts MPC without confirmation.
-- [ ] Desktop helper (only if the shell script isn't enough): ships as a script first, packaged app last.
+- [x] Hardware check (2026-09-30, Force, NOTES.md): `wget` 1.20.3 and `curl` fetch HTTPS from GitHub and this site; `/tmp` is a 1 GB tmpfs.
+- [x] `tools/mpc-store.sh` (BusyBox `sh`): `list`, `install <id[@ver]>...`, `update`, `remove`, `sync`; downloads and checks every zip's sha256
+      from `catalog.tsv` before touching the device, stops MPC once, runs each zip's own `install.sh -y -n`, starts MPC once, remembers
+      what it installed in `<synths>/.mpc-store`; holds back a major (`param_compat`) update unless `--major`; `--dry-run`; never
+      restarts MPC without a confirmation (`-y` to skip). `catalog.tsv` (shell-friendly index of the downloadable plugins) and the
+      helpers `mpc-store.sh`, `sync.sh`, `plugin_list.awk` (hash-checked against the index) are published next to `catalog.json` by
+      `tools/catalog_site.py`. Build-yourself plugins are not in it. Tested offline against a local server (BusyBox) and, dry-run, on a Force.
+- [x] (2026-09-30) Catalog page that builds the one-line command (`ssh -t root@<ip> "wget -qO /tmp/mpc-store.sh <site>/mpc-store.sh && sh /tmp/mpc-store.sh install acid jv-880"`: download, then run, not piped into `sh`, so the confirmation prompts can read the keyboard), with the script
+      text and a "download and review first" version. Ticks on the cards, IP box, copy button, the review steps with the script's sha256; the
+      selection lives in the link (`#sel=acid,jv-880`); `tools/catalog_site/browser_test.py` (Playwright in the html_art image) covers it.
+- [x] Desktop helper (2026-09-30): `tools/desktop` (Go, one static binary per OS, one dependency): a local web page on 127.0.0.1 behind a random
+      token; connect over SSH, pick catalog plugins and/or drop release zips (build-yourself ones too), install with one MPC stop/start;
+      catalog downloads checked against the catalog's sha256; tar stream keeps modes/symlinks; older installers (no `-n`) run first
+      with their own restart. Go tests with an in-process fake SSH device (race detector) and a browser test against a stand-in device.
+      Unsigned binaries (first-run warnings documented). Release: workflow "Desktop installer" (draft release, then publish); v0.3.1 published 2026-10-01.
+      Also removes plugins it can identify (catalog or a dropped zip), keeping the manifest's `user_data` (step 4 on the page), and prunes old
+      `MPC.settings.bak-*` backups (step 5; `mpc-store.sh prune`). The catalog records per version whether the installer understands `-n`
+      (`defer`), so the app states the exact restart count; `mpc-store.sh` runs an older installer by itself instead of passing it `-n`.
 - [ ] Update notices honour `param_compat` (a major bump warns that saved projects will change).
 
 ### Phase 5: Nice to have

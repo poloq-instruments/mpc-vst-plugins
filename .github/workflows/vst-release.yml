@@ -38,6 +38,10 @@ on:
         description: Optional release.py --extra SRC:DEST specs, space-separated, SRC relative to the caller's repo root
         type: string
         default: ''
+      user_data:
+        description: Folders inside the plugin folder that hold the user's own files (ROMs, banks), space-separated; the installer keeps them and moves them in from the old layout
+        type: string
+        default: ''
       about:
         description: One line about the plugin, for INSTALL.md and the release notes
         type: string
@@ -132,6 +136,7 @@ jobs:
           PLUGIN_ID: ${{ inputs.plugin_id }}
           LICENSE_ID: ${{ inputs.license }}
           REQUIRES: ${{ inputs.requires }}
+          USER_DATA: ${{ inputs.user_data }}
         run: |
           B="$VST_DIR/build"
           entry="$B/pluginlist-entry.xml"
@@ -151,6 +156,7 @@ jobs:
             bench="**not measured** - no $VST_DIR/bench.txt, so INSTALL.md has no CPU section"
           fi
           for e in $EXTRA; do args+=(--extra "$e"); done
+          for u in $USER_DATA; do args+=(--user-data "$u"); done
           python3 "$MPC_VST/tools/release.py" "${args[@]}"
           mkdir -p "$GITHUB_WORKSPACE/previews"
           python3 "$MPC_VST/tools/studio.py" preview "$skin/Plugin Skins" -o "$GITHUB_WORKSPACE/previews/page_%d.png"

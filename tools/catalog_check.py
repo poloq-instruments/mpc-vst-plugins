@@ -18,7 +18,7 @@ import sys
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-MAX_GLIBC = (2, 36)
+MAX_GLIBC = (2, 32)
 SEMVER = re.compile(r"\d+\.\d+\.\d+")
 ID = re.compile(r"[a-z0-9]+(-[a-z0-9]+)*")
 
@@ -214,8 +214,11 @@ def check(zpath, catalog=False, expect_id=None, expect_repo=None):
     if os.path.exists(canon) and "plugin_list.awk" in files and open(canon, "rb").read() != files["plugin_list.awk"]:
         warn("plugin_list.awk differs from this repo's current copy: review it")
 
+    # does the installer understand -n (the caller stops and starts MPC)? An installer that does not restarts MPC by itself, so a batch
+    # installer must run it separately (docs/RELEASING.md). Releases of the old layout have no -n.
+    defer = (not legacy) and b"DEFER=" in files.get("install.sh", b"")
     record = {
-        "version": m["version"], "size": os.path.getsize(zpath),
+        "version": m["version"], "size": os.path.getsize(zpath), "defer": defer,
         "sha256": hashlib.sha256(open(zpath, "rb").read()).hexdigest(),
         "param_compat": m["param_compat"], "max_glibc": m.get("max_glibc"), "cpu": m.get("cpu"),
         "manifest": m,

@@ -10,7 +10,7 @@
  * process() call renders exactly one DSP block and MIDI lands at its start.
  * ========================================================================== */
 #ifndef _GNU_SOURCE
-#define _GNU_SOURCE   /* dladdr, for plugin_dir.h; must precede every include */
+#define _GNU_SOURCE   /* must precede every include */
 #endif
 #include <stdint.h>
 #include <stdlib.h>

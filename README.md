@@ -1,6 +1,7 @@
-# VST Plugin Development for MPC OS
+# VST Plugins for MPC OS
 
-Native plugins for **Akai MPC OS standalone devices** (MPC Live/One/X/Key, Force).
+Native plugins for **Akai MPC OS standalone devices** (MPC Live/One/X/Key, Force): a catalog to find and install them,
+an installer app, and the tools to build, test and release your own.
 
 ## Plugin catalog
 
@@ -12,6 +13,12 @@ plugins for MPC OS, with each plugin's current version, license, source link and
 - **Find a plugin.** Search, filter by kind, style, developer, license or distribution, and sort by recently updated or
   most downloaded. Every version shows its date and SHA-256, and what it was tested on. There is an Atom feed
   (`feed.xml`) of new releases.
+- **Install with the installer app.** The [MPC plugin installer](https://github.com/sd88me/mpc-vst-plugins/releases/latest) is a
+  small Windows, Mac and Linux app: connect to your device, tick plugins from the catalog (or drop in zips, including
+  build-yourself ones), and it checks each download, installs the batch with one MPC restart and backs up your settings
+  first. It can also remove plugins (keeping your own files), install to an SD card or USB drive, register plugin folders
+  MPC does not know about, and clean up old settings backups. Needs root SSH access. Source in
+  [tools/desktop](tools/desktop/README.md).
 - **Guides on the site:** [install a downloaded plugin](https://sd88me.github.io/mpc-vst-plugins/install.html),
   [build a plugin](https://sd88me.github.io/mpc-vst-plugins/build.html), the
   [release workflow](https://sd88me.github.io/mpc-vst-plugins/workflow.html) and
@@ -34,30 +41,36 @@ MPC touchscreen page**. There's no bridge, no background app and no LD_PRELOAD: 
 
 ## Where we are
 
-It works on real hardware. Everything below was tested on a Force (September 2026). Other Gen1 MPC OS
-devices run the same `MPC` program, so they should behave the same; reports are welcome. Gen2 devices (e.g. Live III)
-are reported to be more locked down.
+This started as a proof of concept in September 2026. It is now a working ecosystem: plugins are released by their
+authors, listed in the catalog, and installed by people on their own units.
 
-Working today:
+- **Plugins you can install today**: synths, samplers, drum machines, sequencers, an amp simulator and a record-digging
+  streamer, from several authors. Among them are Dexed (DX7), JV-880, Acid, Maze Voice and Maze Sequencer, Crate Digger,
+  Plaits and NAM, plus **Build it yourself** ports (Monomodule, Machinemodule) for engines that need your own firmware.
+  The [catalog](https://sd88me.github.io/mpc-vst-plugins/) has the current list and versions.
+- **A release you can trust.** Every release is built in CI on a pinned toolchain, checked against the catalog's rules
+  (layout, checksums, glibc and CPU limits), smoke-tested on a real device and only then published. Each version
+  shows its SHA-256 and what it was tested on.
+- **Runs on MPC OS 2.x and 3.x.** Plugins are built against glibc 2.31, so they load on older firmware (glibc 2.32,
+  e.g. MPC OS 2.15) as well as current (2.39). The catalog refuses anything that needs more than 2.32.
+- **Tested on a Force** (MPC OS 3.9.1) as the reference device. Other Gen1 MPC OS devices (Live and Live II, One, X,
+  Key 61) run the same `MPC` program. A user's MPC One on MPC OS 2.15 is what led to the glibc 2.31 builds; reports
+  from other models are welcome. Gen2 devices (e.g. Live III) are reported to be more locked down.
+
+What the plugins can do:
 - **Instruments and effects** that play from pads, keys and MIDI clips, with Q-Links, automation, and settings saved
   in the project.
 - **Custom touchscreen pages**: knobs, switches, buttons, option selectors, pop-up lists, live text readouts and
-  artwork, drawn in the same style as the Force Shadow pages they were ported from.
+  artwork, in the same style as the Force Shadow pages many were ported from.
+
+What the tools can do:
 - **A porting kit**: describe an engine's parameters in one small file and the tools build the plugin, its page and
   its Q-Link map, test it on a PC, check its CPU cost on the device, and package it as a shareable zip with an
   installer.
+- **A release workflow** (`vst-release.yml`): a reusable GitHub Actions workflow that builds, tests, previews and
+  packages a port into a draft release; you test the draft zip on a device, then publish.
 - **Skin Studio**, a page editor in your browser: double-click `SkinStudio.command` (macOS), `SkinStudio.bat`
   (Windows) or `SkinStudio.sh` (Linux). It needs Python 3. See [docs/SKIN_STUDIO.md](docs/SKIN_STUDIO.md).
-
-Ports built with it (each in its own repo) very much alpha drafts, not yet polished:
-
-| Plugin | What it is |
-|---|---|
-| [Maze Voice](https://github.com/sd88me/mpc-vst-maze) | Labyrinth-style thru-zero FM / wavefolder / filter synth voice |
-| [DX7](https://github.com/sd88me/mpc-vst-dx7) | 6-operator FM synth (the Dexed engine) |
-| [JV-880](https://github.com/sd88me/mpc-vst-jv880) | JV-880 (Mini-JV) port |
-| [Crate Digger](https://github.com/sd88me/mpc-vst-cratedigger) | Digs Discogs by genre/style/decade and streams records onto a track |
-| [Euclidier](https://github.com/sd88me/mpc-vst-euclidier) | 8-lane Euclidean MIDI note/CC sequencer |
 
 ## How it works
 
@@ -101,8 +114,9 @@ design.
 ## Limitations
 
 - **VST2 only.** MPC OS has no VST3 or LV2 support.
-- **Setup needs file access to the device** to copy the plugin and add it to `MPC.settings`, and adding a new plugin
-  needs one MPC restart. We used SSH on a modded Force.
+- **Setup needs root SSH to the device**, to copy the plugin and add it to `MPC.settings`, so it is for modded units.
+  Adding a new plugin needs one MPC restart; the installers stop and start MPC for you (the service is `acvs`, or
+  `inmusic-mpc` on firmware that has no `acvs`).
 - **No native drop-down picker.** MPC's own menu opens empty for plugins (and can't practically be patched), so option
   lists are drawn by the skin instead: segment buttons or our own pop-up.
 - **No custom-drawn widgets.** No envelope graphs, XY pads or waveform displays; only knobs, faders, buttons, text and
@@ -134,8 +148,10 @@ What's next is in [docs/ROADMAP.md](docs/ROADMAP.md).
    `/media/az01-internal/Settings/MPC/MPC.settings`) and adds each
    `<PLUGIN format="VST" file="/sdcard/Synths/<vendor> - VST - <name>/x.so" …/>` to its plugin list. Edit it with MPC stopped and back it up
    first: malformed XML makes MPC reset it to defaults.
-2. The `.so` exports `VSTPluginMain` (VST2 ABI, hand-written, no Steinberg SDK). Build for armhf against glibc ≤ 2.36
-   (`arm32v7/gcc:12`). Audio is 44.1 kHz in 128-frame blocks.
+2. The `.so` exports `VSTPluginMain` (VST2 ABI, hand-written, no Steinberg SDK). Build for armhf against glibc 2.31
+   (`arm32v7/gcc:11-bullseye`, which `tools/build_port.sh` uses) so it loads on MPC OS 2.x (glibc 2.32) and 3.x (2.39). A
+   newer toolchain binds `pthread_create` and friends to `GLIBC_2.34`, which older firmware cannot load; the catalog
+   check rejects anything above 2.32. Audio is 44.1 kHz in 128-frame blocks.
 3. A skin folder `/sdcard/Synths/<manufacturer> - VST - <name>/` (`version.xml`, `Plugin Skins/TUI.json`,
    `Q-Links.json`) gives it a native screen. Controls bind to `"Parameter N"`, the VST parameter index.
 
@@ -164,6 +180,8 @@ What's next is in [docs/ROADMAP.md](docs/ROADMAP.md).
   popups, MIDI→audio, legacy `process()`, chunks), PASSED/FAILED.
 - `tools/bench.sh` + `tools/bench.c`: a CPU stress test run on the device, with a PASS/WARN/FAIL verdict for Gen1
   hardware. See [docs/BENCH.md](docs/BENCH.md).
+- `tools/desktop/`: the MPC plugin installer app (Go; a local web page that installs, updates and removes plugins over SSH).
+- `tools/mpc-store.sh`: the same install, update, remove, prune and sync from a shell on the device, for the catalog's one-line command.
 - `tools/release.py`: packages a plugin as one shareable zip with an installer, an uninstaller and generated
   INSTALL.md. See [docs/RELEASING.md](docs/RELEASING.md).
 - `tools/probe_device.sh`: a read-only device report (CPU, 32/64-bit MPC, audio threads, plugin formats: VST2 yes,
@@ -178,6 +196,13 @@ What's next is in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 The route was first described on the MPC-Forums thread
 "Proof of Concept: Custom Standalone Plugins" (Sep 2026) by NoQuestion and dustyslices.
+[Schwung](https://github.com/charlesvestal/schwung) by @charlesvestal, the open module platform for Ableton Move,
+inspired a good part of how this project is built: the small engine interface that our wrapper and the
+`adapters/schwung` adapter follow, the build, test and release workflow for modules, and the catalog model (a registry
+of plugins, releases found on GitHub, a static catalog site, and installer apps that fetch from it). We looked at how
+Schwung does these things and made our own versions for MPC OS; thank you for building it in the open.
+
+Credits also to the MockbaMod community for assistance in development, especially @Locrian.
 
 ## Legal
 
