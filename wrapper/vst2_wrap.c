@@ -26,6 +26,14 @@
 #define HAS_TRANSPORT 0 /* 1: tell the DSP when the host transport plays/stops as "transport" = "1"/"0"; a jump back
                           * in song position while playing (a loop, a locate) is sent as "1" again */
 #endif
+#ifndef HAS_DISPLAY_REV
+#define HAS_DISPLAY_REV 0 /* 1: the DSP changes text by itself (a worker thread); poll its "display_rev" every ~100 ms and
+                            * send audioMasterUpdateDisplay when it changes, else the host keeps showing stale readouts */
+#endif
+#ifndef PARAM_TEXT_MAX
+#define PARAM_TEXT_MAX 24 /* value text length handed to the host, NUL included. The VST2 spec says 8, JUCE's buffer is
+                           * bigger; ports that show sentences (status lines) raise it via vst.json "defines" */
+#endif
 #ifndef MODULE_DIR
 #define MODULE_DIR NULL /* set via vst.json "defines" for a DSP that reads its own files
                           * (ROMs, etc.) from "<module_dir>/..." (see jv880's create_instance) */
@@ -96,6 +104,9 @@ typedef struct {
     int playing;             /* HAS_TRANSPORT: last transport state sent */
     double ppq;              /* HAS_TRANSPORT: song position at the last block, to spot a jump back */
     volatile char need_update_display;  /* deferred audioMasterUpdateDisplay -- see setParameter() */
+    int rev_frames;          /* HAS_DISPLAY_REV: frames until the next poll */
+    char last_rev[16];       /* HAS_DISPLAY_REV: the "display_rev" last seen */
+    float last_norm[NPARAMS];   /* HAS_DISPLAY_REV: value last reported per param (-1 = never), to push engine changes */
     volatile char changed[NPARAMS];  /* params the plugin changed itself (step_of on an option), to report */
     float open[NPARAMS];     /* popup "open" flags (popup.h): kept here, never sent to the DSP or saved */
     float last_pos[NPARAMS]; /* stepped params: the last position the host asked for, in steps (-1 = none yet) */
@@ -260,6 +271,21 @@ static void render_frames(wrap_t *w, float **out, int32_t n, int accumulate) {
 static void housekeeping(AEffect *e, int32_t n) {
     wrap_t *w = e->object;
     if (HAS_LFO_BPM || HAS_TRANSPORT) update_tempo(w);
+    if (HAS_DISPLAY_REV && (w->rev_frames -= n) <= 0) {
+        char rev[16];
+        w->rev_frames = 4410;
+        if (g_api->get_param(w->dsp, "display_rev", rev, sizeof rev) > 0 && strcmp(rev, w->last_rev)) {
+            memcpy(w->last_rev, rev, sizeof rev);
+            w->need_update_display = 1;
+            /* the engine changed values by itself (a state, a meter): report them so the host moves controls and
+             * re-evaluates IndexedEnabling (when= panels), not only text */
+            for (int i = 0; i < NPARAMS; i++) {
+                if (PARAMS[i].momentary || popup_is(i) || PARAMS[i].string_display) continue;
+                float v = get_norm(w, i);
+                if (fabsf(v - w->last_norm[i]) > 1e-4f) { w->last_norm[i] = v; w->master(&w->fx, audioMasterAutomate, i, 0, 0, v); }
+            }
+        }
+    }
     /* A trigger param (e.g. Generate) fired: tell the host it is back to 0 so
      * buttons bound to it drop their highlight. Done here, not inside
      * setParameter, so the host is not re-entered from its own call. */
@@ -366,18 +392,18 @@ static intptr_t dispatcher(AEffect *e, int32_t op, int32_t idx, intptr_t v, void
         if (idx >= 0 && idx < NPARAMS) copy_str(p, PARAMS[idx].unit, 8);
         return 1;
     case effGetParamDisplay: {
-        char buf[64];
+        char buf[PARAM_TEXT_MAX > 64 ? PARAM_TEXT_MAX : 64];
         if (idx < 0 || idx >= NPARAMS) return 0;
         const param_t *pp = &PARAMS[idx];
         char k2[96];
         snprintf(k2, sizeof k2, "%s_display", pp->key);
         if (pp->dynamic_display && g_api->get_param(w->dsp, k2, buf, sizeof buf) > 0) {
-            copy_str(p, buf, 24);   /* text the DSP composes (e.g. a destination's own name) */
+            copy_str(p, buf, PARAM_TEXT_MAX);   /* text the DSP composes (e.g. a destination's own name) */
         } else if (pp->nopts) {
             int k = (int)lroundf(get_norm(w, idx) * (pp->nopts - 1));
-            copy_str(p, pp->opts[k], 24);
+            copy_str(p, pp->opts[k], PARAM_TEXT_MAX);
         } else if (g_api->get_param(w->dsp, pp->key, buf, sizeof buf) > 0) {
-            if (pp->string_display) copy_str(p, buf, 24);   /* real text (a name, a status), not a number */
+            if (pp->string_display) copy_str(p, buf, PARAM_TEXT_MAX);   /* real text (a name, a status), not a number */
             else snprintf(p, 24, "%.*f", (pp->int_display || fabs(pp->max - pp->min) > 20) ? 0 : 1, atof(buf));
         }
         return 1;
@@ -432,7 +458,7 @@ __attribute__((visibility("default"))) AEffect *VSTPluginMain(audioMasterCallbac
     if (!w->dsp) { free(w); return NULL; }
     w->master = master;
     w->pos = DSP_BLOCK;
-    for (int i = 0; i < NPARAMS; i++) w->last_pos[i] = -1;
+    for (int i = 0; i < NPARAMS; i++) w->last_pos[i] = w->last_norm[i] = -1;
     AEffect *e = &w->fx;
     e->magic = 0x56737450; /* 'VstP' */
     e->dispatcher = dispatcher;

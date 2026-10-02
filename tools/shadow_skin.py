@@ -143,7 +143,7 @@ def parse_layout(path):
     return tabs, top
 
 
-INT_KEYS = ("x", "y", "w", "h", "cx", "cy", "r", "sw", "rows", "cols", "th", "gap")
+INT_KEYS = ("x", "y", "w", "h", "cx", "cy", "r", "sw", "sh", "rows", "cols", "th", "gap")
 
 
 def parse_widget(line):
@@ -201,6 +201,32 @@ def expand_pictures(widgets):
                 out.append({"kind": "art", "file": f, "x": w["x"], "y": w["y"], "w": w["w"], "h": w["h"],
                             "fit": w.get("fit", "contain"), "when": "%s:%d" % (w["key"], i)})
     return out
+
+
+TEXT_WEIGHTS = {"regular": "Regular", "400": "Regular", "semibold": "SemiBold", "600": "SemiBold", "bold": "Bold",
+                "700": "Bold", "light": "Light", "300": "Light"}
+TEXT_JUST = {"left": "left verticallyCentred", "center": "horizontallyCentred verticallyCentred",
+             "right": "right verticallyCentred"}
+
+
+def live_text(w, size, colour, just):
+    """A readout's or list row's live text style, overridable per line: tsize= (px), tcolor= (hex), tweight=
+    (regular|semibold|bold|light or 400/600/700/300), talign= (left|center|right), tfont= (Titillium Web or Roboto,
+    the families MPC renders). -> (size, colour, justification, style, font, signature for the component name)."""
+    size = float(w.get("tsize", size))
+    colour = w.get("tcolor", colour).lstrip("#")
+    style = TEXT_WEIGHTS.get(str(w.get("tweight", "semibold")).lower(), "SemiBold")
+    just = TEXT_JUST.get(w.get("talign"), just)
+    font = w.get("tfont", "Titillium Web")
+    sig = "" if not any(k in w for k in ("tsize", "tcolor", "tweight", "talign", "tfont")) else \
+        "_%s" % slug("%g_%s_%s_%s_%s" % (size, colour, style, just.split()[0], font))
+    return size, colour, just, style, font, sig
+
+
+def card_art(img, x, y, tw, th, base_dir):
+    """A list row drawn from the port's own picture (img=/img_on=) instead of the renderer's tile."""
+    path = os.path.abspath(os.path.join(base_dir, img))
+    return ("svg|%s|%d|%d|%d|%d" if path.lower().endswith(".svg") else "image|%s|%d|%d|%d|%d|stretch") % (path, x, y, tw, th)
 
 
 def toggle_rect(w, base_dir="."):
@@ -290,7 +316,7 @@ def seg_rects(w):
         sw, sh, gap = 135, 30, 2
         y0 = w["cy"] - (n * (sh + gap)) // 2
         return [(w["cx"] - sw // 2, y0 + i * (sh + gap), sw, sh) for i in range(n)]
-    sw, sh, gap = w.get("sw") or 117, 33, 2
+    sw, sh, gap = w.get("sw") or 117, w.get("sh") or 33, 2   # sw=/sh=: segment size
     rows = w.get("rows", 1)
     per = -(-n // rows)
     out = []
@@ -362,6 +388,8 @@ def baked_cmds(w, title_font=None, base_dir="."):
             cmds.append("frameblank|%d|%d|%d|%d" % (w["x"], w["y"], w["w"], w["h"]))
         else:
             cmds.append("frame|%d|%d|%d|%d|%s" % (w["x"], w["y"], w["w"], w["h"], w.get("title") or "-"))
+    elif w["kind"] == "readout" and str(w.get("box", "1")) == "0":
+        pass   # box=0: live text only, over the page's own artwork
     elif w["kind"] in ("readout", "stepper", "menu", "popup"):
         op = "readout" if w["kind"] in ("menu", "popup") else w["kind"]
         if w["kind"] in ("readout", "stepper") and w.get("style") == "dotmatrix":
@@ -372,7 +400,8 @@ def baked_cmds(w, title_font=None, base_dir="."):
         cmds.append(cmd)
     elif w["kind"] == "list":
         for (x, y, tw, th) in list_tiles(w):
-            cmds.append("tile|%d|%d|%d|%d|%s|%s|0" % (x, y, tw, th, LCD, LINE))
+            cmds.append(card_art(w["img"], x, y, tw, th, base_dir) if w.get("img")
+                        else "tile|%d|%d|%d|%d|%s|%s|0" % (x, y, tw, th, LCD, LINE))
     elif w["kind"] == "text":
         size = float(w.get("size", 1.5))
         color = w.get("color", INK)
@@ -465,9 +494,10 @@ def _focus(w, h):
                 _bounds(0, 0, w, h, visible="WhenFocussed"), "Focus")
 
 
-def _value_label(x, y, w, h, size, colour, just="horizontallyCentred verticallyCentred", handle="Data"):
-    return _sub("Label", {"version": 1, "textStyle": {"version": 1, "font": {"version": 1, "name": "Titillium Web",
-                                                                         "style": "SemiBold", "height": size},
+def _value_label(x, y, w, h, size, colour, just="horizontallyCentred verticallyCentred", handle="Data", style="SemiBold",
+                 font="Titillium Web"):
+    return _sub("Label", {"version": 1, "textStyle": {"version": 1, "font": {"version": 1, "name": font,
+                                                                         "style": style, "height": size},
                                                    "colour": "ff" + colour, "justification": just, "case": "Original"},
                           "type": "Value", "handleName": handle}, _bounds(x, y, w, h), "Value")
 
@@ -841,8 +871,13 @@ def build(layout_path, params, skin_dir, art_bin, png_from_ppm):
             elif kind == "readout":
                 x, y, rw, rh = w["cx"] - w["w"] // 2, w["cy"] - w["h"] // 2, w["w"], w["h"]
                 dot = w.get("style") == "dotmatrix"
-                key = "shReadout_%s%dx%d" % ("dot_" if dot else "", rw, rh)
-                defs.setdefault(key, _local(key, [], [_value_label(8, 0, rw - 16, rh, 26.0, DISPLAY_INK if dot else ACCENT)]))
+                size, colour, just, style, font, sig = live_text(w, 26.0, DISPLAY_INK if dot else ACCENT,
+                                                                 "left verticallyCentred")
+                pad = int(w.get("tpad", 8))
+                key = "shReadout_%s%dx%d%s_p%d" % ("dot_" if dot else "", rw, rh, sig, pad) if sig or pad != 8 else \
+                    "shReadout_%s%dx%d" % ("dot_" if dot else "", rw, rh)
+                defs.setdefault(key, _local(key, [], [_value_label(pad, 0, rw - 2 * pad, rh, size, colour, just,
+                                                                   style=style, font=font)]))
                 kids.append(_placed(key, name, i, x, y, rw, rh, focus="No"))
             elif kind == "stepper":
                 x0, y0 = w["cx"] - w["w"] // 2, w["cy"] - w["h"] // 2
@@ -869,15 +904,23 @@ def build(layout_path, params, skin_dir, art_bin, png_from_ppm):
                     kids.append(_placed(akey, "%s %s" % (name, side), index[side_key], ax, ay, aw, ah, focus="No"))
             elif kind == "list":
                 for slot, ((x, y, tw, th), sk) in enumerate(zip(list_tiles(w), list_keys(w))):
-                    img = "sh_tile_%dx%d" % (tw, th)
+                    own = w.get("img")   # img=/img_on=: the port's own card pictures (off, selected)
+                    img = "sh_tile_%dx%d" % (tw, th) if not own else "sh_card_%s_%dx%d" % (slug(w["key"]), tw, th)
                     for state, border in (("on", 3), ("off", 0)):
-                        script += ["clear|" + under(), "tile|%d|%d|%d|%d|%s|%s|%d" % (x, y, tw, th, LCD, SEG_ON if border else LINE, border),
+                        drawn = card_art(w.get("img_on", own) if border else own, x, y, tw, th, base_dir) if own else \
+                            "tile|%d|%d|%d|%d|%s|%s|%d" % (x, y, tw, th, LCD, SEG_ON if border else LINE, border)
+                        script += ["clear|" + under(), drawn,
                                    "crop|%s|%d|%d|%d|%d" % (art("%s_%s" % (img, state)), x, y, tw, th)]
-                    key = "shRow_%dx%d" % (tw, th)
+                    size, colour, just, style, font, sig = live_text(w, 24.0, ACCENT, "left verticallyCentred")
+                    # tx=/ty=/tw=/th= place the row's text inside the card (default: the whole row, 12 px in)
+                    lx, ly = int(w.get("tx", 12)), int(w.get("ty", 0))
+                    lw, lh = int(w.get("ttw", tw - lx - 12)), int(w.get("tth", th - ly))
+                    key = "shRow_%dx%d%s" % (tw, th, sig + ("_%d_%d_%d_%d" % (lx, ly, lw, lh) if (lx, ly, lw, lh) != (12, 0, tw - 24, th) else "")
+                                            + ("_" + slug(w["key"]) if own else ""))
                     # the Value label lies over the button and takes the touch, so the row itself toggles on touch
                     defs.setdefault(key, _local(key, [_action("Mouse Down", "Toggle Switch"), _action("Enter Pressed", "Toggle Switch")],
                                                 [_focus(tw, th), _button(img + "_on.png", img + "_off.png", 1, 1, tw, th),
-                                                 _value_label(12, 0, tw - 24, th, 24.0, ACCENT, "left verticallyCentred")]))
+                                                 _value_label(lx, ly, lw, lh, size, colour, just, style=style, font=font)]))
                     kids.append(_placed(key, "%s %d" % (name, slot + 1), index[sk], x, y, tw, th, focus="Yes" if slot == 0 else "No"))
             else:  # enum_h / enum_v: radio group, one image button per option
                 n = len(w["options"])
