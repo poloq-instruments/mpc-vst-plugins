@@ -17,8 +17,9 @@ vst.json (paths are relative to the vst.json's folder):
       "custom_skin": true,                       # optional: params.h + plugin-list entry only; the port makes the skin itself
       "defines": {"HAS_LFO_BPM": 1},             # optional extra #defines in params.h
                                                  #   (HAS_LFO_BPM: host tempo as "lfo_bpm"; HAS_TRANSPORT: play/stop as "transport")
-      "build": {"root": "..", "sources": ["src/engine.c"], "cflags": ["-Isrc"], "libs": ["-lm"]}
-    }
+      "build": {"root": "..", "sources": ["src/engine.c"], "cflags": ["-Isrc"], "libs": ["-lm"],
+                "cflags_arm": ["-mcpu=cortex-a17", "-mfpu=neon-vfpv4"]}   # optional: device build only,
+    }                                                                     #   not the x86 host tests
 The sources provide mpc_engine() (wrapper/engine.h). An engine from another ecosystem names its own
 parameter source instead of "params" and gets its adapter linked in (adapters/<name>/README.md).
 The VST parameter index of each key is its position in the list; skins bind to it as "Parameter N".
@@ -158,6 +159,7 @@ def main():
         root = os.path.normpath(os.path.join(here, b.get("root", ".")))
         for k, v in (("ROOT", root), ("PORT", os.path.relpath(here, root)), ("SO", cfg["so"]),
                      ("SOURCES", " ".join(b.get("sources", []))), ("CFLAGS", " ".join(b.get("cflags", []))),
+                     ("ARM_CFLAGS", " ".join(b.get("cflags_arm", []))),
                      ("LIBS", " ".join(b.get("libs", ["-lm"]))),
                      ("LAYOUT", "1" if cfg.get("layout") else ""),
                      ("TITLE_FONT", cfg.get("title_font", "")),
